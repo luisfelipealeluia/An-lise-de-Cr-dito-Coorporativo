@@ -1,0 +1,216 @@
+# Importação das bibliotecas necessárias
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Modelos e métricas
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.svm import LinearSVR
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import r2_score, mean_absolute_error, mean_squared_error
+
+import statsmodels.api as sm
+from unidecode import unidecode  # Import unidecode to handle accents
+
+# Configuração dos gráficos
+sns.set(style='whitegrid')
+
+# 1. Leitura dos Dados
+df = pd.read_excel('file_name', dtype=str)
+print("Dimensões do DataFrame após a leitura:", df.shape)
+
+# 2. Tratamento dos Nomes das Colunas usando unidecode
+df.columns = [unidecode(col.strip().replace(' ', '_').replace('.', '').replace('/', '_')) for col in df.columns]
+print("\nColunas do DataFrame:")
+print(df.columns.tolist())
+
+# 3. Atualização da lista de colunas numéricas com base nos novos nomes
+# Remover 'PD' da lista de colunas numéricas
+numeric_columns = ['Margem_EBITDA', 'ROA', 'ROE', 'Composicao_Divida_CP', 'Divida_Liquida_EBITDA', 'Endividamento', 
+                   'EBITDA_Desp_Financ', 'Liquidez_Geral', 'Liquidez_Imediata', 'Imobilizacao_do_PL', 
+                   'Indice_de_Capitalizacao', 'Capital_Terceiros']
+
+# 4. Tratamento dos Dados Numéricos
+for col in numeric_columns:
+    # Substituir vírgulas por pontos e converter para float
+    df[col] = df[col].str.replace(',', '.')
+    df[col] = pd.to_numeric(df[col], errors='coerce')
+
+# Verificar se há valores não numéricos nas colunas numéricas
+for col in numeric_columns:
+    if df[col].isnull().any():
+        print(f"\nAtenção: Valores ausentes ou não numéricos encontrados na coluna '{col}'.")
+        # Decida como tratar esses valores (excluir linhas ou imputar valores)
+        df = df.dropna(subset=[col])
+
+# 5. Conversão da Variável 'Rating' para numérico
+print("\nValores únicos em 'Rating':")
+print(df['Rating'].unique())
+
+rating_mapping = {'AAA': 1, 'AA': 2, 'A': 3, 'BBB': 4, 'BB': 5, 'B': 6, 'CCC': 7, 'CC': 8, 'C': 9, 'D': 10}
+
+df['Rating_Num'] = df['Rating'].map(rating_mapping)
+
+# Verificar se há Ratings não mapeados
+if df['Rating_Num'].isnull().any():
+    missing_ratings = df[df['Rating_Num'].isnull()]['Rating'].unique()
+    print(f"\nOs seguintes ratings não foram mapeados: {missing_ratings}")
+    df = df.dropna(subset=['Rating_Num'])
+
+# 6. Preparação dos Dados para o Modelo
+non_numeric_columns = ['Razao_Social']  # Adicione outras colunas não numéricas se existirem
+columns_to_drop = ['Rating', 'Rating_Num', 'PD'] + [col for col in non_numeric_columns if col in df.columns]
+
+X = df.drop(columns=columns_to_drop, axis=1)
+y = df['Rating_Num'].astype(float)
+
+# Converter todas as colunas em X para numérico
+X = X.apply(pd.to_numeric, errors='coerce')
+
+# Remover linhas com valores ausentes em X
+X = X.dropna()
+y = y.loc[X.index]
+
+print("\nDimensões de X após limpeza:", X.shape)
+print("Dimensões de y após limpeza:", y.shape)
+
+# Verificar se o DataFrame está vazio
+if X.empty or y.empty:
+    print("\nErro: O DataFrame está vazio após a limpeza. Revise as etapas de pré-processamento.")
+    exit()
+
+# 6.1. Verificar multicolinearidade
+print("\nAnalisando a multicolinearidade entre as variáveis...")
+corr_matrix = X.corr().abs()
+
+# Selecionar as colunas com alta correlação (acima de 0.9)
+upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+high_corr_features = [column for column in upper.columns if any(upper[column] > 0.9)]
+
+print("Variáveis com alta correlação:", high_corr_features)
+
+# Remover as variáveis altamente correlacionadas
+X = X.drop(columns=high_corr_features, axis=1)
+print("Dimensões de X após remover variáveis altamente correlacionadas:", X.shape)
+
+# 7. Divisão dos Dados em Treino e Teste
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# 8. Modelo OLS (Regressão Linear)
+X_train_ols = sm.add_constant(X_train)
+X_test_ols = sm.add_constant(X_test)
+
+model_ols = sm.OLS(y_train, X_train_ols).fit()
+
+print("\nResumo do modelo OLS:")
+print(model_ols.summary())
+
+# Coeficientes estimados
+coefficients = model_ols.params
+
+# 9. Gráfico dos Coeficientes do OLS
+plt.figure(figsize=(10,6))
+coefficients.drop('const').plot(kind='bar')
+plt.title('Coeficientes do Modelo OLS')
+plt.xlabel('Variáveis')
+plt.ylabel('Peso')
+plt.tight_layout()
+plt.show()
+
+# 10. Avaliação do Modelo OLS
+y_pred_ols = model_ols.predict(X_test_ols)
+r2_ols = r2_score(y_test, y_pred_ols)
+mae_ols = mean_absolute_error(y_test, y_pred_ols)
+rmse_ols = np.sqrt(mean_squared_error(y_test, y_pred_ols))
+
+print(f"R² do OLS: {r2_ols:.4f}")
+print(f"MAE do OLS: {mae_ols:.4f}")
+print(f"RMSE do OLS: {rmse_ols:.4f}")
+
+# 11. Modelo Random Forest
+rf = RandomForestRegressor(n_estimators=100, random_state=42)
+rf.fit(X_train, y_train)
+
+importances_rf = rf.feature_importances_
+indices_rf = np.argsort(importances_rf)[::-1]
+
+print("\nImportâncias das variáveis no Random Forest:")
+for idx in indices_rf:
+    print(f"{X.columns[idx]}: {importances_rf[idx]:.4f}")
+
+# 12. Gráfico das Importâncias do Random Forest
+plt.figure(figsize=(10,6))
+sns.barplot(x=importances_rf[indices_rf], y=X.columns[indices_rf])
+plt.title('Importância das Variáveis no Random Forest')
+plt.xlabel('Importância')
+plt.ylabel('Variáveis')
+plt.tight_layout()
+plt.show()
+
+# 13. Avaliação do Modelo Random Forest
+y_pred_rf = rf.predict(X_test)
+r2_rf = r2_score(y_test, y_pred_rf)
+mae_rf = mean_absolute_error(y_test, y_pred_rf)
+rmse_rf = np.sqrt(mean_squared_error(y_test, y_pred_rf))
+
+print(f"R² do Random Forest: {r2_rf:.4f}")
+print(f"MAE do Random Forest: {mae_rf:.4f}")
+print(f"RMSE do Random Forest: {rmse_rf:.4f}")
+
+# 14. Modelo SVM
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+svr = LinearSVR(random_state=42, max_iter=10000)
+svr.fit(X_train_scaled, y_train)
+
+# 15. Importância das Variáveis no SVM via coeficientes
+importances_svr = np.abs(svr.coef_)
+indices_svr = np.argsort(importances_svr)[::-1]
+
+print("\nImportâncias das variáveis no SVM:")
+for idx in indices_svr:
+    print(f"{X.columns[idx]}: {importances_svr[idx]:.4f}")
+
+# 16. Gráfico das Importâncias do SVM
+plt.figure(figsize=(10,6))
+sns.barplot(x=importances_svr[indices_svr], y=X.columns[indices_svr])
+plt.title('Importância das Variáveis no SVM')
+plt.xlabel('Importância')
+plt.ylabel('Variáveis')
+plt.tight_layout()
+plt.show()
+
+# 17. Avaliação do Modelo SVM
+y_pred_svr = svr.predict(X_test_scaled)
+r2_svr = r2_score(y_test, y_pred_svr)
+mae_svr = mean_absolute_error(y_test, y_pred_svr)
+rmse_svr = np.sqrt(mean_squared_error(y_test, y_pred_svr))
+
+print(f"R² do SVM: {r2_svr:.4f}")
+print(f"MAE do SVM: {mae_svr:.4f}")
+print(f"RMSE do SVM: {rmse_svr:.4f}")
+
+# 18. Comparação das Métricas dos Modelos
+metrics = pd.DataFrame({
+    'Modelo': ['OLS', 'Random Forest', 'SVM'],
+    'R²': [r2_ols, r2_rf, r2_svr],
+    'MAE': [mae_ols, mae_rf, mae_svr],
+    'RMSE': [rmse_ols, rmse_rf, rmse_svr]
+})
+
+print("\nComparação das métricas dos modelos:")
+print(metrics)
+
+# Gráfico de Comparação das Métricas
+metrics_melted = metrics.melt(id_vars='Modelo', var_name='Métrica', value_name='Valor')
+
+plt.figure(figsize=(10,6))
+sns.barplot(x='Métrica', y='Valor', hue='Modelo', data=metrics_melted)
+plt.title('Comparação das Métricas dos Modelos')
+plt.ylabel('Valor')
+plt.tight_layout()
+plt.show()
